@@ -1,7 +1,7 @@
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
-    id("org.jetbrains.kotlin.plugin.serialization") version "1.9.22"
+    id("org.jetbrains.kotlin.plugin.serialization")
 }
 
 android {
@@ -19,7 +19,10 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
-            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
         }
     }
     compileOptions {
