@@ -56,7 +56,7 @@ class MainActivity : ComponentActivity() {
                         isConnected = isConnected,
                         logs = logs,
                         onRequestPermission = { requestAudioPermission() },
-                        onStartService = { apiKey -> startGeminiLive(apiKey) }
+                        onStartService = { apiKey, modelName -> startGeminiLive(apiKey, modelName) }
                     )
                 }
             }
@@ -80,7 +80,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun startGeminiLive(apiKey: String) {
+    private fun startGeminiLive(apiKey: String, modelName: String) {
         logs.clear()
         addLog("Запуск сервісу...")
 
@@ -92,6 +92,7 @@ class MainActivity : ComponentActivity() {
 
                 webSocketClient = GeminiWebSocketClient(
                     apiKey = apiKey.trim(),
+                    modelName = modelName.trim(),
                     audioRecorder = audioRecorder,
                     audioPlayer = audioPlayer,
                     toolRegistry = toolRegistry,
@@ -122,9 +123,10 @@ fun MainScreen(
     isConnected: Boolean,
     logs: List<String>,
     onRequestPermission: () -> Unit,
-    onStartService: (String) -> Unit
+    onStartService: (String, String) -> Unit
 ) {
     var apiKey by remember { mutableStateOf("") }
+    var modelName by remember { mutableStateOf("gemini-2.0-flash-exp") }
 
     Column(
         modifier = Modifier
@@ -150,10 +152,21 @@ fun MainScreen(
 
         Spacer(modifier = Modifier.height(8.dp))
 
+        OutlinedTextField(
+            value = modelName,
+            onValueChange = { modelName = it },
+            label = { Text("Модель (напр. gemini-2.0-flash-exp)") },
+            singleLine = true,
+            enabled = !isConnected,
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
         if (hasPermission) {
             Button(
-                onClick = { onStartService(apiKey) },
-                enabled = apiKey.isNotBlank() && !isConnected,
+                onClick = { onStartService(apiKey, modelName) },
+                enabled = apiKey.isNotBlank() && modelName.isNotBlank() && !isConnected,
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text(if (isConnected) "З'єднано (Слухаю...)" else "Запустити асистента")
@@ -188,7 +201,7 @@ fun MainScreen(
                 items(logs) { log ->
                     Text(
                         text = "> $log",
-                        color = if (log.contains("Помилка")) Color.Red else Color.Green,
+                        color = if (log.contains("Помилка") || log.contains("Причина")) Color.Red else Color.Green,
                         fontSize = 12.sp,
                         fontFamily = FontFamily.Monospace,
                         modifier = Modifier.padding(vertical = 2.dp)

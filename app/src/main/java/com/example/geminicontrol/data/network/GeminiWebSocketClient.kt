@@ -15,6 +15,7 @@ import java.util.concurrent.TimeUnit
 
 class GeminiWebSocketClient(
     private val apiKey: String,
+    private val modelName: String,
     private val audioRecorder: AudioRecorderManager,
     private val audioPlayer: AudioTrackPlayer,
     private val toolRegistry: ToolRegistry,
@@ -37,7 +38,7 @@ class GeminiWebSocketClient(
     suspend fun connectAndStart() = withContext(Dispatchers.IO) {
         val url = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=$apiKey"
 
-        onLog("Ініціалізація з'єднання через OkHttp...")
+        onLog("Ініціалізація з'єднання для моделі: $modelName")
         audioPlayer.start()
 
         try {
@@ -46,7 +47,7 @@ class GeminiWebSocketClient(
                 onLog("WebSocket успішно з'єднано!")
 
                 sendSetupFrame()
-                onLog("Setup-фрейм відправлено в сокет")
+                onLog("Setup-фрейм відправлено")
 
                 var chunksSent = 0
                 val recordJob = launch {
@@ -60,7 +61,7 @@ class GeminiWebSocketClient(
                             }
                         }
                     } catch (e: CancellationException) {
-                        // Нормальна відміна
+                        // Нормальне завершення
                     } catch (e: Exception) {
                         onLog("Помилка мікрофона: ${e.localizedMessage}")
                     }
@@ -85,7 +86,7 @@ class GeminiWebSocketClient(
                 } finally {
                     val reason = closeReason.await()
                     if (reason != null) {
-                        onLog("Причина закриття сесії: ${reason.code} - ${reason.message}")
+                        onLog("Причина закриття: ${reason.code} - ${reason.message}")
                     } else {
                         onLog("Сесію сокета завершено")
                     }
@@ -99,9 +100,11 @@ class GeminiWebSocketClient(
     }
 
     private suspend fun sendSetupFrame() {
+        val formattedModel = if (modelName.startsWith("models/")) modelName else "models/$modelName"
+
         val setupJson = buildJsonObject {
             putJsonObject("setup") {
-                put("model", "models/gemini-2.0-flash-exp")
+                put("model", formattedModel)
                 putJsonObject("generationConfig") {
                     putJsonArray("responseModalities") {
                         add("AUDIO")
