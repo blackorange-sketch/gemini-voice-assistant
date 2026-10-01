@@ -6,12 +6,18 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.example.geminicontrol.data.audio.AudioRecorderManager
@@ -20,11 +26,13 @@ import com.example.geminicontrol.data.network.GeminiWebSocketClient
 import com.example.geminicontrol.domain.tools.ToolRegistry
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
 
     private var hasAudioPermission by mutableStateOf(false)
     private var isConnected by mutableStateOf(false)
+    private val logs = mutableStateListOf<String>()
     private var webSocketClient: GeminiWebSocketClient? = null
 
     private val requestPermissionLauncher = registerForActivityResult(
@@ -46,6 +54,7 @@ class MainActivity : ComponentActivity() {
                     MainScreen(
                         hasPermission = hasAudioPermission,
                         isConnected = isConnected,
+                        logs = logs,
                         onRequestPermission = { requestAudioPermission() },
                         onStartService = { apiKey -> startGeminiLive(apiKey) }
                     )
@@ -65,26 +74,38 @@ class MainActivity : ComponentActivity() {
         requestPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
     }
 
-    private fun startGeminiLive(apiKey: String) {
-        val audioRecorder = AudioRecorderManager()
-        val audioPlayer = AudioTrackPlayer()
-        val toolRegistry = ToolRegistry(this)
+    private fun addLog(msg: String) {
+        lifecycleScope.launch(Dispatchers.Main) {
+            logs.add(0, msg)
+        }
+    }
 
-        webSocketClient = GeminiWebSocketClient(
-            apiKey = apiKey,
-            audioRecorder = audioRecorder,
-            audioPlayer = audioPlayer,
-            toolRegistry = toolRegistry
-        )
+    private fun startGeminiLive(apiKey: String) {
+        logs.clear()
+        addLog("Запуск сервісу...")
 
         lifecycleScope.launch(Dispatchers.IO) {
-            isConnected = true
             try {
+                val audioRecorder = AudioRecorderManager()
+                val audioPlayer = AudioTrackPlayer()
+                val toolRegistry = ToolRegistry(this@MainActivity)
+
+                webSocketClient = GeminiWebSocketClient(
+                    apiKey = apiKey.trim(),
+                    audioRecorder = audioRecorder,
+                    audioPlayer = audioPlayer,
+                    toolRegistry = toolRegistry,
+                    onLog = { msg -> addLog(msg) }
+                )
+
+                withContext(Dispatchers.Main) { isConnected = true }
+
                 webSocketClient?.connectAndStart()
-            } catch (e: Exception) {
+
+            } catch (e: Throwable) {
                 e.printStackTrace()
-            } finally {
-                isConnected = false
+                addLog("Критична помилка: ${e.localizedMessage ?: e.toString()}")
+                withContext(Dispatchers.Main) { isConnected = false }
             }
         }
     }
@@ -99,6 +120,7 @@ class MainActivity : ComponentActivity() {
 fun MainScreen(
     hasPermission: Boolean,
     isConnected: Boolean,
+    logs: List<String>,
     onRequestPermission: () -> Unit,
     onStartService: (String) -> Unit
 ) {
@@ -107,16 +129,15 @@ fun MainScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
+            .padding(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Text(
             text = "Gemini Voice Control",
-            style = MaterialTheme.typography.headlineMedium
+            style = MaterialTheme.typography.headlineSmall
         )
 
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(12.dp))
 
         OutlinedTextField(
             value = apiKey,
@@ -127,7 +148,7 @@ fun MainScreen(
             modifier = Modifier.fillMaxWidth()
         )
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(8.dp))
 
         if (hasPermission) {
             Button(
@@ -143,6 +164,36 @@ fun MainScreen(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text("Надати дозвіл на мікрофон")
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Text(
+            text = "Консоль подій:",
+            style = MaterialTheme.typography.labelMedium,
+            modifier = Modifier.align(Alignment.Start)
+        )
+
+        Spacer(modifier = Modifier.height(4.dp))
+
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .background(Color(0xFF1E1E1E))
+                .padding(8.dp)
+        ) {
+            LazyColumn {
+                items(logs) { log ->
+                    Text(
+                        text = "> $log",
+                        color = if (log.contains("Помилка")) Color.Red else Color.Green,
+                        fontSize = 12.sp,
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier.padding(vertical = 2.dp)
+                    )
+                }
             }
         }
     }

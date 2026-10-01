@@ -16,7 +16,8 @@ class GeminiWebSocketClient(
     private val apiKey: String,
     private val audioRecorder: AudioRecorderManager,
     private val audioPlayer: AudioTrackPlayer,
-    private val toolRegistry: ToolRegistry
+    private val toolRegistry: ToolRegistry,
+    private val onLog: (String) -> Unit
 ) {
     private val client = HttpClient(CIO) {
         install(WebSockets)
@@ -27,22 +28,27 @@ class GeminiWebSocketClient(
     suspend fun connectAndStart() = withContext(Dispatchers.IO) {
         val url = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=$apiKey"
 
+        onLog("Підключення до сокета...")
         audioPlayer.start()
 
         client.webSocket(url) {
             session = this
-            
-            // 1. Send Setup Frame
-            sendSetupFrame()
+            onLog("WebSocket з'єднано!")
 
-            // 2. Launch Audio Recording Job
+            sendSetupFrame()
+            onLog("Setup-фрейм відправлено")
+
+            var chunksSent = 0
             val recordJob = launch {
                 audioRecorder.startRecording().cancellable().collect { pcmChunk ->
                     sendAudioChunk(pcmChunk)
+                    chunksSent++
+                    if (chunksSent % 20 == 0) {
+                        onLog("Відправлено $chunksSent аудіо-фрагментів")
+                    }
                 }
             }
 
-            // 3. Listen for Incoming Messages
             try {
                 for (frame in incoming) {
                     if (frame is Frame.Text) {
@@ -50,9 +56,12 @@ class GeminiWebSocketClient(
                         handleServerMessage(text)
                     }
                 }
+            } catch (e: Exception) {
+                onLog("Помилка сокета: ${e.localizedMessage}")
             } finally {
                 recordJob.cancel()
                 audioPlayer.stop()
+                onLog("З'єднання закрито")
             }
         }
     }
@@ -109,23 +118,35 @@ class GeminiWebSocketClient(
     private suspend fun handleServerMessage(jsonText: String) {
         val json = Json.parseToJsonElement(jsonText).jsonObject
 
-        // Handle Audio Output from Gemini
+        if (json.containsKey("error")) {
+            val errMsg = json["error"]?.jsonObject?.get("message")?.jsonPrimitive?.content ?: jsonText
+            onLog("Помилка від Gemini: $errMsg")
+            return
+        }
+
+        var receivedAudio = false
         json["serverContent"]?.jsonObject?.get("modelTurn")?.jsonObject?.get("parts")?.jsonArray?.forEach { part ->
             part.jsonObject["inlineData"]?.jsonObject?.let { inlineData ->
                 val base64Data = inlineData["data"]?.jsonPrimitive?.content ?: ""
                 val pcmBytes = Base64.decode(base64Data, Base64.DEFAULT)
                 audioPlayer.playChunk(pcmBytes)
+                receivedAudio = true
             }
         }
+        if (receivedAudio) {
+            onLog("Отримано аудіо-відповідь від Gemini")
+        }
 
-        // Handle Tool Calling
         json["toolCall"]?.jsonObject?.get("functionCalls")?.jsonArray?.forEach { call ->
             val callObj = call.jsonObject
             val callId = callObj["id"]?.jsonPrimitive?.content ?: ""
             val functionName = callObj["name"]?.jsonPrimitive?.content ?: ""
             val args = callObj["args"]?.toString() ?: "{}"
 
+            onLog("Gemini викликає функцію: $functionName($args)")
             val resultJson = toolRegistry.executeTool(functionName, args)
+            onLog("Результат виконання: $resultJson")
+
             sendToolResponse(callId, resultJson)
         }
     }
