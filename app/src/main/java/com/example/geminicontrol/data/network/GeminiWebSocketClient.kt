@@ -58,8 +58,10 @@ class GeminiWebSocketClient(
                                 onLog("Передано $chunksSent фрагментів аудіо")
                             }
                         }
+                    } catch (e: CancellationException) {
+                        // Нормальне завершення запису
                     } catch (e: Exception) {
-                        onLog("Помилка запису мікрофона: ${e.localizedMessage}")
+                        onLog("Помилка мікрофона: ${e.localizedMessage}")
                     }
                 }
 
@@ -87,14 +89,14 @@ class GeminiWebSocketClient(
         val setupJson = buildJsonObject {
             putJsonObject("setup") {
                 put("model", "models/gemini-2.0-flash-exp")
-                putJsonObject("generation_config") {
-                    putJsonArray("response_modalities") {
+                putJsonObject("generationConfig") {
+                    putJsonArray("responseModalities") {
                         add("AUDIO")
                     }
                 }
                 putJsonArray("tools") {
                     addJsonObject {
-                        putJsonArray("function_declarations") {
+                        putJsonArray("functionDeclarations") {
                             addJsonObject {
                                 put("name", "toggle_flashlight")
                                 put("description", "Увімкнути або вимкнути ліхтарик смартфона")
@@ -120,10 +122,10 @@ class GeminiWebSocketClient(
     private suspend fun sendAudioChunk(pcmData: ByteArray) {
         val base64Audio = Base64.encodeToString(pcmData, Base64.NO_WRAP)
         val realtimeInput = buildJsonObject {
-            putJsonObject("realtime_input") {
-                putJsonArray("media_chunks") {
+            putJsonObject("realtimeInput") {
+                putJsonArray("mediaChunks") {
                     addJsonObject {
-                        put("mime_type", "audio/pcm;rate=16000")
+                        put("mimeType", "audio/pcm;rate=16000")
                         put("data", base64Audio)
                     }
                 }
@@ -170,8 +172,8 @@ class GeminiWebSocketClient(
 
     private suspend fun sendToolResponse(callId: String, resultJson: String) {
         val toolResponse = buildJsonObject {
-            putJsonObject("tool_response") {
-                putJsonArray("function_responses") {
+            putJsonObject("toolResponse") {
+                putJsonArray("functionResponses") {
                     addJsonObject {
                         put("id", callId)
                         put("response", Json.parseToJsonElement(resultJson))
