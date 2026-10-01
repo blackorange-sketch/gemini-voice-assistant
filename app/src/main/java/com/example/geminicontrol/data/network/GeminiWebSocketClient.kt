@@ -23,7 +23,7 @@ class GeminiWebSocketClient(
     private val client = HttpClient(OkHttp) {
         engine {
             config {
-                connectTimeout(10, TimeUnit.SECONDS)
+                connectTimeout(15, TimeUnit.SECONDS)
                 readTimeout(0, TimeUnit.SECONDS)
             }
         }
@@ -46,11 +46,12 @@ class GeminiWebSocketClient(
                 onLog("WebSocket успішно з'єднано!")
 
                 sendSetupFrame()
-                onLog("Setup-фрейм надруковано в сокет")
+                onLog("Setup-фрейм відправлено в сокет")
 
                 var chunksSent = 0
                 val recordJob = launch {
                     try {
+                        onLog("Запуск запису мікрофона...")
                         audioRecorder.startRecording().cancellable().collect { pcmChunk ->
                             sendAudioChunk(pcmChunk)
                             chunksSent++
@@ -59,7 +60,7 @@ class GeminiWebSocketClient(
                             }
                         }
                     } catch (e: CancellationException) {
-                        // Нормальне завершення запису
+                        // Нормальна відміна
                     } catch (e: Exception) {
                         onLog("Помилка мікрофона: ${e.localizedMessage}")
                     }
@@ -67,21 +68,33 @@ class GeminiWebSocketClient(
 
                 try {
                     for (frame in incoming) {
-                        if (frame is Frame.Text) {
-                            val text = frame.readText()
-                            handleServerMessage(text)
+                        when (frame) {
+                            is Frame.Text -> {
+                                val text = frame.readText()
+                                handleServerMessage(text)
+                            }
+                            is Frame.Close -> {
+                                val reason = frame.readReason()
+                                onLog("Закрито сервером (CloseFrame): code=${reason?.code}, reason=${reason?.message}")
+                            }
+                            else -> {}
                         }
                     }
                 } catch (e: Exception) {
-                    onLog("Помилка зчитування сокета: ${e.localizedMessage}")
+                    onLog("Помилка сокета: ${e.localizedMessage}")
                 } finally {
+                    val reason = closeReason.await()
+                    if (reason != null) {
+                        onLog("Причина закриття сесії: ${reason.code} - ${reason.message}")
+                    } else {
+                        onLog("Сесію сокета завершено")
+                    }
                     recordJob.cancel()
                     audioPlayer.stop()
-                    onLog("Сесію сокета завершено")
                 }
             }
         } catch (e: Exception) {
-            onLog("Помилка підключення OkHttp: ${e.localizedMessage ?: e.toString()}")
+            onLog("Помилка підключення: ${e.localizedMessage ?: e.toString()}")
         }
     }
 
@@ -92,6 +105,13 @@ class GeminiWebSocketClient(
                 putJsonObject("generationConfig") {
                     putJsonArray("responseModalities") {
                         add("AUDIO")
+                    }
+                    putJsonObject("speechConfig") {
+                        putJsonObject("voiceConfig") {
+                            putJsonObject("prebuiltVoiceConfig") {
+                                put("voiceName", "Puck")
+                            }
+                        }
                     }
                 }
                 putJsonArray("tools") {
@@ -157,16 +177,17 @@ class GeminiWebSocketClient(
         }
 
         json["toolCall"]?.jsonObject?.get("functionCalls")?.jsonArray?.forEach { call ->
-            val callObj = call.jsonObject
-            val callId = callObj["id"]?.jsonPrimitive?.content ?: ""
-            val functionName = callObj["name"]?.jsonPrimitive?.content ?: ""
-            val args = callObj["args"]?.toString() ?: "{}"
+            call.jsonObject.let { callObj ->
+                val callId = callObj["id"]?.jsonPrimitive?.content ?: ""
+                val functionName = callObj["name"]?.jsonPrimitive?.content ?: ""
+                val args = callObj["args"]?.toString() ?: "{}"
 
-            onLog("Gemini викликає функцію: $functionName($args)")
-            val resultJson = toolRegistry.executeTool(functionName, args)
-            onLog("Результат виконання: $resultJson")
+                onLog("Gemini викликає функцію: $functionName($args)")
+                val resultJson = toolRegistry.executeTool(functionName, args)
+                onLog("Результат виконання: $resultJson")
 
-            sendToolResponse(callId, resultJson)
+                sendToolResponse(callId, resultJson)
+            }
         }
     }
 
