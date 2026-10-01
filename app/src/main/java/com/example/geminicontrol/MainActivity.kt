@@ -13,10 +13,19 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
+import com.example.geminicontrol.data.audio.AudioRecorderManager
+import com.example.geminicontrol.data.audio.AudioTrackPlayer
+import com.example.geminicontrol.data.network.GeminiWebSocketClient
+import com.example.geminicontrol.domain.tools.ToolRegistry
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
     private var hasAudioPermission by mutableStateOf(false)
+    private var isConnected by mutableStateOf(false)
+    private var webSocketClient: GeminiWebSocketClient? = null
 
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -36,7 +45,9 @@ class MainActivity : ComponentActivity() {
                 ) {
                     MainScreen(
                         hasPermission = hasAudioPermission,
-                        onRequestPermission = { requestAudioPermission() }
+                        isConnected = isConnected,
+                        onRequestPermission = { requestAudioPermission() },
+                        onStartService = { apiKey -> startGeminiLive(apiKey) }
                     )
                 }
             }
@@ -53,12 +64,43 @@ class MainActivity : ComponentActivity() {
     private fun requestAudioPermission() {
         requestPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
     }
+
+    private fun startGeminiLive(apiKey: String) {
+        val audioRecorder = AudioRecorderManager()
+        val audioPlayer = AudioTrackPlayer()
+        val toolRegistry = ToolRegistry(this)
+
+        webSocketClient = GeminiWebSocketClient(
+            apiKey = apiKey,
+            audioRecorder = audioRecorder,
+            audioPlayer = audioPlayer,
+            toolRegistry = toolRegistry
+        )
+
+        lifecycleScope.launch(Dispatchers.IO) {
+            isConnected = true
+            try {
+                webSocketClient?.connectAndStart()
+            } catch (e: Exception) {
+                e.printStackTrace()
+            } finally {
+                isConnected = false
+            }
+        }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        webSocketClient?.close()
+    }
 }
 
 @Composable
 fun MainScreen(
     hasPermission: Boolean,
-    onRequestPermission: () -> Unit
+    isConnected: Boolean,
+    onRequestPermission: () -> Unit,
+    onStartService: (String) -> Unit
 ) {
     var apiKey by remember { mutableStateOf("") }
 
@@ -81,6 +123,7 @@ fun MainScreen(
             onValueChange = { apiKey = it },
             label = { Text("Gemini API Key") },
             singleLine = true,
+            enabled = !isConnected,
             modifier = Modifier.fillMaxWidth()
         )
 
@@ -88,11 +131,11 @@ fun MainScreen(
 
         if (hasPermission) {
             Button(
-                onClick = { /* TODO: Старт WebSocket та аудіо */ },
-                enabled = apiKey.isNotBlank(),
+                onClick = { onStartService(apiKey) },
+                enabled = apiKey.isNotBlank() && !isConnected,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text("Запустити голосовий асистент")
+                Text(if (isConnected) "З'єднано (Слухаю...)" else "Запустити асистента")
             }
         } else {
             Button(
