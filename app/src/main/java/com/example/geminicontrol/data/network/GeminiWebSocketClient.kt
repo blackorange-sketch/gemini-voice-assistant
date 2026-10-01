@@ -5,12 +5,13 @@ import com.example.geminicontrol.data.audio.AudioRecorderManager
 import com.example.geminicontrol.data.audio.AudioTrackPlayer
 import com.example.geminicontrol.domain.tools.ToolRegistry
 import io.ktor.client.*
-import io.ktor.client.engine.cio.*
+import io.ktor.client.engine.okhttp.*
 import io.ktor.client.plugins.websocket.*
 import io.ktor.websocket.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.cancellable
 import kotlinx.serialization.json.*
+import java.util.concurrent.TimeUnit
 
 class GeminiWebSocketClient(
     private val apiKey: String,
@@ -19,8 +20,16 @@ class GeminiWebSocketClient(
     private val toolRegistry: ToolRegistry,
     private val onLog: (String) -> Unit
 ) {
-    private val client = HttpClient(CIO) {
-        install(WebSockets)
+    private val client = HttpClient(OkHttp) {
+        engine {
+            config {
+                connectTimeout(10, TimeUnit.SECONDS)
+                readTimeout(0, TimeUnit.SECONDS)
+            }
+        }
+        install(WebSockets) {
+            pingInterval = 15_000
+        }
     }
 
     private var session: DefaultClientWebSocketSession? = null
@@ -28,41 +37,49 @@ class GeminiWebSocketClient(
     suspend fun connectAndStart() = withContext(Dispatchers.IO) {
         val url = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=$apiKey"
 
-        onLog("Підключення до сокета...")
+        onLog("Ініціалізація з'єднання через OkHttp...")
         audioPlayer.start()
 
-        client.webSocket(url) {
-            session = this
-            onLog("WebSocket з'єднано!")
+        try {
+            client.webSocket(url) {
+                session = this
+                onLog("WebSocket успішно з'єднано!")
 
-            sendSetupFrame()
-            onLog("Setup-фрейм відправлено")
+                sendSetupFrame()
+                onLog("Setup-фрейм надруковано в сокет")
 
-            var chunksSent = 0
-            val recordJob = launch {
-                audioRecorder.startRecording().cancellable().collect { pcmChunk ->
-                    sendAudioChunk(pcmChunk)
-                    chunksSent++
-                    if (chunksSent % 20 == 0) {
-                        onLog("Відправлено $chunksSent аудіо-фрагментів")
+                var chunksSent = 0
+                val recordJob = launch {
+                    try {
+                        audioRecorder.startRecording().cancellable().collect { pcmChunk ->
+                            sendAudioChunk(pcmChunk)
+                            chunksSent++
+                            if (chunksSent % 20 == 0) {
+                                onLog("Передано $chunksSent фрагментів аудіо")
+                            }
+                        }
+                    } catch (e: Exception) {
+                        onLog("Помилка запису мікрофона: ${e.localizedMessage}")
                     }
                 }
-            }
 
-            try {
-                for (frame in incoming) {
-                    if (frame is Frame.Text) {
-                        val text = frame.readText()
-                        handleServerMessage(text)
+                try {
+                    for (frame in incoming) {
+                        if (frame is Frame.Text) {
+                            val text = frame.readText()
+                            handleServerMessage(text)
+                        }
                     }
+                } catch (e: Exception) {
+                    onLog("Помилка зчитування сокета: ${e.localizedMessage}")
+                } finally {
+                    recordJob.cancel()
+                    audioPlayer.stop()
+                    onLog("Сесію сокета завершено")
                 }
-            } catch (e: Exception) {
-                onLog("Помилка сокета: ${e.localizedMessage}")
-            } finally {
-                recordJob.cancel()
-                audioPlayer.stop()
-                onLog("З'єднання закрито")
             }
+        } catch (e: Exception) {
+            onLog("Помилка підключення OkHttp: ${e.localizedMessage ?: e.toString()}")
         }
     }
 
